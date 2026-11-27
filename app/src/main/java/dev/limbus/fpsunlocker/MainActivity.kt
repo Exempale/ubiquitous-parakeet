@@ -106,7 +106,7 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
             checkShizuku(requestIfNeeded = true)
         })
         shizukuCard.addView(space(8))
-        shizukuCard.addView(actionButton("ВКЛЮЧИТЬ PERFORMANCE MODE", cyan) {
+        shizukuCard.addView(actionButton("ПРИМЕНИТЬ GAME MANAGER 120 FPS", cyan) {
             if (ensureShizukuPermission()) applyFpsTarget()
         })
         shizukuCard.addView(space(8))
@@ -134,12 +134,12 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
         infoCard.addView(label("ЧТО ДЕЛАЕТ ЭТА НАСТРОЙКА", 14f, white, true))
         infoCard.addView(space(6))
         infoCard.addView(label(
-            "Через Shizuku приложение переключает поддерживаемый Android Game Mode для Limbus Company. Android 16 на этом устройстве блокирует запись game_overlay, поэтому приложение не пытается обходить системный allowlist. Performance mode не гарантирует 120 FPS и не снимает внутренний лимит игры.",
+            "Через Shizuku приложение использует штатный интерфейс cmd game set для передачи FPS intervention в GameManager, не записывая защищённый DeviceConfig напрямую. Затем включает Performance mode и проверяет результат. Android FPS intervention ограничивает частоту сверху и не снимает внутренний лимит игры, поэтому 120 FPS не гарантируются.",
             13f, muted, false
         ))
         infoCard.addView(space(8))
         infoCard.addView(label(
-            "Перед включением проверяется список режимов, которые Android действительно поддерживает для игры. Кнопка восстановления возвращает Standard mode. FPS игры нужно проверять отдельно.",
+            "Перед включением проверяется список режимов игры. Восстановление сбрасывает FPS intervention для Performance mode и возвращает Standard mode. Фактический FPS нужно проверять отдельно.",
             13f, muted, false
         ))
         content.addView(infoCard)
