@@ -4,6 +4,10 @@ plugins {
 }
 
 android {
+    buildFeatures {
+        aidl = true
+    }
+
     namespace = "dev.limbus.fpsunlocker"
     compileSdk = 35
 
