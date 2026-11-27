@@ -2,9 +2,12 @@ package dev.limbus.fpsunlocker
 
 import android.app.Activity
 import android.content.Intent
+import android.content.ComponentName
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
 import android.os.Bundle
+import android.os.IBinder
 import android.provider.Settings
 import android.graphics.Color
 import android.graphics.Typeface
@@ -26,6 +29,23 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
     private lateinit var gameStatus: TextView
     private lateinit var shizukuStatus: TextView
     private lateinit var resultStatus: TextView
+    private var shellService: IShizukuShellService? = null
+    private var shellBindingRequested = false
+    private var userServiceArgs: Shizuku.UserServiceArgs? = null
+
+    private val shellConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            shellService = IShizukuShellService.Stub.asInterface(service)
+            shellBindingRequested = false
+            updateShizukuStatus("Shizuku подключён • shell-служба готова")
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            shellService = null
+            shellBindingRequested = false
+            updateShizukuStatus("Shell-служба отключена. Проверь Shizuku.")
+        }
+    }
 
     private val backgroundColor = Color.rgb(8, 11, 18)
     private val cardColor = Color.rgb(20, 27, 39)
@@ -97,11 +117,11 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
         })
         shizukuCard.addView(space(8))
         shizukuCard.addView(actionButton("ПРИМЕНИТЬ ЦЕЛЬ 120 FPS", cyan) {
-            if (ensureShizukuPermission()) applyFpsTarget()
+            if (ensureShizukuPermission() && ensureShellService()) applyFpsTarget()
         })
         shizukuCard.addView(space(8))
         shizukuCard.addView(actionButton("ВОССТАНОВИТЬ НАСТРОЙКУ", Color.rgb(76, 45, 57)) {
-            if (ensureShizukuPermission()) restoreFpsTarget()
+            if (ensureShizukuPermission() && ensureShellService()) restoreFpsTarget()
         })
         resultStatus = label("Изменения не применялись.", 12f, muted, false)
         shizukuCard.addView(space(8))
@@ -156,6 +176,7 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
 
     override fun onDestroy() {
         Shizuku.removeRequestPermissionResultListener(permissionListener)
+        userServiceArgs?.let { Shizuku.unbindUserService(it, shellConnection, true) }
         super.onDestroy()
     }
 
@@ -167,6 +188,27 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
         if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) return true
         Shizuku.requestPermission(SHIZUKU_PERMISSION_CODE)
         updateShizukuStatus("Выдай разрешение этому приложению в окне Shizuku.")
+        return false
+    }
+
+    private fun ensureShellService(): Boolean {
+        if (shellService != null) return true
+        if (shellBindingRequested) {
+            resultStatus.text = "Подключаю shell-службу Shizuku… Подожди пару секунд."
+            return false
+        }
+        try {
+            val args = Shizuku.UserServiceArgs(
+                ComponentName(this, ShellUserService::class.java)
+            ).daemon(false).processNameSuffix("fpsshell").version(1).tag("LimbusFpsShell")
+            userServiceArgs = args
+            shellBindingRequested = true
+            Shizuku.bindUserService(args, shellConnection)
+            resultStatus.text = "Подключаю shell-службу Shizuku… После подключения нажми кнопку ещё раз."
+        } catch (e: Exception) {
+            shellBindingRequested = false
+            resultStatus.text = "Не удалось запустить shell-службу: ${e.message ?: e.javaClass.simpleName}"
+        }
         return false
     }
 
@@ -241,13 +283,13 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
 
     private data class ShellResult(val exitCode: Int, val output: String)
 
-    @Suppress("DEPRECATION")
     private fun runShell(command: String): ShellResult {
-        val process = Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
-        val stdout = process.inputStream.bufferedReader().use { it.readText() }
-        val stderr = process.errorStream.bufferedReader().use { it.readText() }
-        val exit = process.waitFor()
-        return ShellResult(exit, (stdout + if (stderr.isBlank()) "" else "\n$stderr").trim())
+        val raw = shellService?.execute(command)
+            ?: throw IllegalStateException("Shizuku shell-служба не подключена")
+        val firstLine = raw.substringBefore("\n")
+        val exit = firstLine.removePrefix("EXIT:").toIntOrNull() ?: 1
+        val output = raw.substringAfter("\n", "").trim()
+        return ShellResult(exit, output)
     }
 
     private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
