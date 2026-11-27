@@ -331,7 +331,7 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
     private fun logDiagnostic(message: String) {
         val line = "${SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())} | $message"
         synchronized(diagnosticLog) {
-            diagnosticLog.append(line).append('\\n')
+            diagnosticLog.append(line).append('\n')
             if (diagnosticLog.length > 24000) diagnosticLog.delete(0, diagnosticLog.length - 24000)
         }
         Log.i("LimbusFPS", message)
@@ -342,12 +342,12 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
         val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString("diagnostics", "") ?: ""
         val live = synchronized(diagnosticLog) { diagnosticLog.toString() }
         val report = buildString {
-            append("Limbus FPS Unlocker diagnostics\\n")
-            append("Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}; Android ${android.os.Build.VERSION.RELEASE} (SDK ${android.os.Build.VERSION.SDK_INT})\\n")
-            append("Shizuku ping: ${runCatching { Shizuku.pingBinder() }.getOrDefault(false)}\\n")
-            append("Shizuku permission: ${runCatching { Shizuku.checkSelfPermission() }.getOrDefault(-1)}\\n")
-            append("Shizuku API: ${runCatching { Shizuku.getVersion() }.getOrDefault(-1)}; UID: ${runCatching { Shizuku.getUid() }.getOrDefault(-1)}\\n")
-            append("Shell bound: ${shellService != null}; binding requested: $shellBindingRequested; timed out: $bindTimedOut\\n\\n")
+            append("Limbus FPS Unlocker diagnostics\n")
+            append("Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}; Android ${android.os.Build.VERSION.RELEASE} (SDK ${android.os.Build.VERSION.SDK_INT})\n")
+            append("Shizuku ping: ${runCatching { Shizuku.pingBinder() }.getOrDefault(false)}\n")
+            append("Shizuku permission: ${runCatching { Shizuku.checkSelfPermission() }.getOrDefault(-1)}\n")
+            append("Shizuku API: ${runCatching { Shizuku.getVersion() }.getOrDefault(-1)}; UID: ${runCatching { Shizuku.getUid() }.getOrDefault(-1)}\n")
+            append("Shell bound: ${shellService != null}; binding requested: $shellBindingRequested; timed out: $bindTimedOut\n\n")
             append(if (live.isNotBlank()) live else saved)
         }
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
