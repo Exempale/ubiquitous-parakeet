@@ -197,7 +197,7 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
     }
 
     private fun applyFpsTarget() {
-        resultStatus.text = "Проверяю доступные режимы Android GameManager…"
+        resultStatus.text = "Проверяю GameManager и применяю FPS intervention…"
         thread(name = "limbus-game-mode-apply") {
             try {
                 val before = runShell("cmd game list-modes $GAME_PACKAGE")
@@ -215,28 +215,38 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
                 if ("performance" !in supported) {
                     throw IllegalStateException(
                         "Android не сообщает Performance mode как доступный для Limbus Company. " +
-                        "Нельзя безопасно включить его через GameManager. Ответ: ${before.stdout}"
+                        "Ответ GameManager: ${before.stdout}"
                     )
                 }
 
-                val changed = runShell("cmd game mode performance $GAME_PACKAGE")
-                if (changed.exitCode != 0) {
-                    throw IllegalStateException("GameManager отказал: ${changed.stderr.ifBlank { changed.stdout }}")
+                // Use GameManagerService's supported shell API instead of writing
+                // the protected DeviceConfig game_overlay namespace directly.
+                val setConfig = runShell("cmd game set --mode 2 --fps 120 $GAME_PACKAGE")
+                if (setConfig.exitCode != 0) {
+                    throw IllegalStateException("GameManager не принял FPS intervention: ${setConfig.stderr.ifBlank { setConfig.stdout }}")
+                }
+
+                val config = runShell("cmd game list-configs $GAME_PACKAGE")
+                if (config.exitCode != 0 || config.stdout.contains("No interventions found")) {
+                    throw IllegalStateException("Не удалось подтвердить FPS intervention: ${config.stdout}; ${config.stderr}")
+                }
+                logDiagnostic("GAME CONFIG AFTER SET: ${config.stdout}")
+
+                val mode = runShell("cmd game mode performance $GAME_PACKAGE")
+                if (mode.exitCode != 0) {
+                    throw IllegalStateException("Не удалось включить Performance mode: ${mode.stderr.ifBlank { mode.stdout }}")
                 }
 
                 val after = runShell("cmd game list-modes $GAME_PACKAGE")
                 if (after.exitCode != 0 || !after.stdout.contains("current mode: performance")) {
-                    throw IllegalStateException(
-                        "Команда завершилась, но проверка режима не подтвердила Performance. " +
-                        "Ответ: ${after.stdout}; stderr: ${after.stderr}"
-                    )
+                    throw IllegalStateException("Проверка Performance mode не прошла: ${after.stdout}; ${after.stderr}")
                 }
 
-                val message = "Performance mode включён и проверен. ${after.stdout.trim()} Это не разблокирует FPS выше внутреннего лимита игры."
+                val message = "FPS intervention передан GameManager, Performance mode включён. Конфигурация: ${config.stdout.trim()}. Это системная настройка-ограничитель, а не гарантия 120 FPS в игре."
                 logDiagnostic("APPLY RESULT: $message")
                 runOnUiThread { resultStatus.text = message }
             } catch (e: Exception) {
-                val message = "Не удалось включить Performance mode: ${e.message ?: e.javaClass.simpleName}"
+                val message = "Не удалось применить GameManager intervention: ${e.message ?: e.javaClass.simpleName}"
                 logDiagnostic("APPLY ERROR: ${Log.getStackTraceString(e)}")
                 runOnUiThread { resultStatus.text = message }
             }
@@ -244,18 +254,23 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
     }
 
     private fun restoreFpsTarget() {
-        resultStatus.text = "Возвращаю Standard mode…"
+        resultStatus.text = "Сбрасываю FPS intervention и возвращаю Standard mode…"
         thread(name = "limbus-game-mode-restore") {
             try {
+                val reset = runShell("cmd game reset --mode performance $GAME_PACKAGE")
+                if (reset.exitCode != 0) {
+                    throw IllegalStateException("Не удалось сбросить FPS intervention: ${reset.stderr.ifBlank { reset.stdout }}")
+                }
                 val restored = runShell("cmd game mode standard $GAME_PACKAGE")
                 if (restored.exitCode != 0) {
-                    throw IllegalStateException(restored.stderr.ifBlank { restored.stdout.ifBlank { "GameManager вернул код ${restored.exitCode}" } })
+                    throw IllegalStateException("Не удалось вернуть Standard mode: ${restored.stderr.ifBlank { restored.stdout }}")
                 }
                 val verify = runShell("cmd game list-modes $GAME_PACKAGE")
                 if (verify.exitCode != 0 || !verify.stdout.contains("current mode: standard")) {
                     throw IllegalStateException("Проверка Standard mode не прошла: ${verify.stdout}; ${verify.stderr}")
                 }
-                val message = "Standard mode восстановлен. ${verify.stdout.trim()}"
+                val config = runShell("cmd game list-configs $GAME_PACKAGE")
+                val message = "Standard mode восстановлен. FPS intervention сброшен. ${verify.stdout.trim()} Конфигурация: ${config.stdout.trim()}"
                 logDiagnostic("RESTORE RESULT: $message")
                 runOnUiThread { resultStatus.text = message }
             } catch (e: Exception) {
