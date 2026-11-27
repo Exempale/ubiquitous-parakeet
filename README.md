@@ -7,8 +7,9 @@ A Shizuku-powered GameManager configuration helper for Android.
 - Checks that Limbus Company is installed and can launch it.
 - Checks Shizuku availability and runtime permission.
 - Runs short Android shell commands through Shizuku's `newProcess` API (no custom UserService Binder).
-- Reads the current `game_overlay` value, saves a backup, applies a Performance-mode `fps=120` value, and verifies the write.
-- Restores the previous `game_overlay` value.
+- Checks the GameManager modes Android reports as available for Limbus Company.
+- Enables Performance mode only when Android reports it as supported, then verifies the selected mode.
+- Restores Standard mode and verifies the result.
 - Copies diagnostic logs to the clipboard.
 - Custom neon FPS launcher icon.
 
@@ -21,10 +22,10 @@ The supported intervention values depend on the device's display mode. For a 120
 1. Install and start Shizuku using Wireless debugging.
 2. Open Limbus FPS Unlocker.
 3. Grant the app access in Shizuku when prompted.
-4. Use **Apply Game Mode 120 FPS** to set and verify the GameManager configuration.
-5. Use **Restore settings** to restore the saved previous value.
+4. Use **Enable Performance Mode** only if Android reports that mode as supported for the game.
+5. Use **Return to Standard Mode** to restore the normal mode.
 
-The app uses Shizuku's one-shot process API for three short commands. It intentionally no longer binds a custom Shizuku UserService, because that binding did not deliver a Binder callback on the tested Nothing Phone (2a) Plus / Android 16 configuration.
+The app uses Shizuku's one-shot process API. On Android 16, shell writes to `game_overlay/<package>` may be rejected because the flag is not in the OS DeviceConfig allowlist. The app therefore does not attempt to bypass that restriction or claim that setting `fps=120` unlocks the game. It uses the supported GameManager mode command and verifies the resulting mode.
 
 ## Build locally
 1. Open this folder in Android Studio.
