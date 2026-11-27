@@ -4,10 +4,6 @@ plugins {
 }
 
 android {
-    buildFeatures {
-        aidl = true
-    }
-
     namespace = "dev.limbus.fpsunlocker"
     compileSdk = 35
 
@@ -15,8 +11,8 @@ android {
         applicationId = "dev.limbus.fpsunlocker"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     compileOptions {
@@ -33,6 +29,5 @@ android {
 dependencies {
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
-    implementation("androidx.annotation:annotation:1.9.1")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 }
