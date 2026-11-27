@@ -1,34 +1,35 @@
-# Limbus FPS Unlocker — diagnostic companion prototype
+# Limbus FPS Unlocker
 
-This is a small Android Studio project for a no-root, no-extra-permission companion app.
+A no-root, no-extra-permission companion app for Nothing Phone (2a) Plus and Limbus Company.
 
-## What it does
-- Reads the phone's current display refresh rate.
-- Lists display modes reported by Android.
-- Checks whether the Limbus Company package can be launched.
-- Opens Android Display settings or launches the game.
+## Current app features
+- Shows the display's current refresh rate in Hz.
+- Lists refresh-rate modes exposed by Android.
+- Checks whether Limbus Company is installed and can be launched.
+- Shortcuts to Android Display settings and Developer options.
+- Custom neon FPS launcher icon.
 
-## What it does NOT do
-- It does not unlock the game's internal 60 FPS cap.
-- It does not measure Limbus Company FPS.
-- It does not inject code, modify the game APK, draw an overlay, or run in the background.
+## Important limitation
+This app does **not** unlock Limbus Company's internal FPS cap and does **not** read the game's true rendered FPS. Android isolates apps from one another: a normal third-party APK cannot change another app's Unity runtime, modify its rendering surface, or issue privileged GameManager shell commands.
 
-Android's `Surface.setFrameRate()` is scoped to the calling app's own display surface. It cannot set the frame rate of another app's surface. A regular third-party app also cannot inspect another app's rendered frame count without privileged access or instrumentation.
+A real game-side unlock would require either a change by Project Moon, or an explicitly authorized system-level mechanism (for example, an ADB/Shizuku shell action or a rooted runtime module). Those are outside this project's current no-extra-permission requirement. The app does not pretend that the display's Hz reading is the game's FPS.
 
-## Build
-1. Open this folder in Android Studio (recent version).
+## Build locally
+1. Open this folder in Android Studio.
 2. Allow Gradle sync.
 3. Build > Build Bundle(s) / APK(s) > Build APK(s).
-4. Install the debug APK on the phone.
+4. Install `app/build/outputs/apk/debug/app-debug.apk`.
 
-The project uses compileSdk 35 and Android Gradle Plugin 8.7.3. If Android Studio proposes a compatible Gradle/JDK update, accept its recommendation.
+## Automatic GitHub builds and Releases
+Every push to `main` builds an installable debug APK and publishes a GitHub Release named `Limbus FPS Unlocker Build #N`, with `LimbusFPSUnlocker.apk` attached.
 
-## Package ID check
-The prototype checks `com.ProjectMoon.LimbusCompany`. If the Play Store build on your device uses a different package ID, update `GAME_PACKAGE` in `MainActivity.kt` and the matching `<queries>` entry in `AndroidManifest.xml`.
+You can also push a version tag matching `v*` (for example `v0.1.0`) to publish a named version release.
 
+The workflow requires repository Actions to be enabled and `contents: write` permission. The APK is debug-signed by the ephemeral GitHub runner, so a later build may not install as an in-place update over an earlier build; uninstall the old debug build first if Android reports a signature conflict.
 
-## Build APK with GitHub Actions
-1. Create a GitHub repository and upload the contents of this folder.
-2. Open the repository's Actions tab.
-3. Run **Build Android APK** (or push to `main`).
-4. Open the completed workflow run and download the `LimbusFPSUnlocker-debug` artifact.
+## Technical details
+- Application ID: `dev.limbus.fpsunlocker`
+- Limbus package checked: `com.ProjectMoon.LimbusCompany`
+- Compile SDK: 35
+- Java/Kotlin bytecode target: 17
+- Android Gradle Plugin: 8.7.3
