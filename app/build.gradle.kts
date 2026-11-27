@@ -1,6 +1,11 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    dependencies {
+        implementation("dev.rikka.shizuku:api:13.1.5")
+        implementation("dev.rikka.shizuku:provider:13.1.5")
+        coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+    }
 }
 
 android {
@@ -20,6 +25,8 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    compileOptions.isCoreLibraryDesugaringEnabled = true
 
     kotlinOptions {
         jvmTarget = "17"
