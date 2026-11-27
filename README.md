@@ -22,10 +22,10 @@ The supported intervention values depend on the device's display mode. For a 120
 1. Install and start Shizuku using Wireless debugging.
 2. Open Limbus FPS Unlocker.
 3. Grant the app access in Shizuku when prompted.
-4. Use **Enable Performance Mode** only if Android reports that mode as supported for the game.
-5. Use **Return to Standard Mode** to restore the normal mode.
+4. Use **Apply GameManager 120 FPS** if Android reports Performance mode as supported for the game.
+5. Use **Return to Standard Mode** to reset the intervention and restore the normal mode.
 
-The app uses Shizuku's one-shot process API. On Android 16, shell writes to `game_overlay/<package>` may be rejected because the flag is not in the OS DeviceConfig allowlist. The app therefore does not attempt to bypass that restriction or claim that setting `fps=120` unlocks the game. It uses the supported GameManager mode command and verifies the resulting mode.
+The app uses Shizuku's one-shot process API. On Android 16, direct shell writes to `game_overlay/<package>` may be rejected because the flag is not in the OS DeviceConfig allowlist. The app therefore uses the GameManager shell service command (`cmd game set`) for the FPS intervention instead of writing DeviceConfig directly. This remains an FPS cap/intervention, not a way to remove a game's own internal FPS limit.
 
 ## Build locally
 1. Open this folder in Android Studio.
