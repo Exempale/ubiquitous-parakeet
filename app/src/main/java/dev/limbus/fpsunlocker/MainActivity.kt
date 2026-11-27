@@ -230,16 +230,16 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
             return false
         }
         try {
-            logDiagnostic("BIND requested: ping=${Shizuku.pingBinder()}, uid=${runCatching { Shizuku.getUid() }.getOrDefault(-1)}, api=${runCatching { Shizuku.getVersion() }.getOrDefault(-1)}")
+            logDiagnostic("BIND requested: ping=${Shizuku.pingBinder()}, uid=${runCatching { Shizuku.getUid() }.getOrDefault(-1)}, api=${runCatching { Shizuku.getVersion() }.getOrDefault(-1)}, serverPatch=${runCatching { Shizuku.getServerPatchVersion() }.getOrDefault(-1)}")
             val args = Shizuku.UserServiceArgs(
                 ComponentName(this, ShellUserService::class.java)
-            ).daemon(false).processNameSuffix("fpsshell").version(3).tag("LimbusFpsShell")
+            ).daemon(false).processNameSuffix("fpsshell").version(4).tag("LimbusFpsShell")
             userServiceArgs = args
             shellBindingRequested = true
             Shizuku.bindUserService(args, shellConnection)
             mainHandler.removeCallbacks(bindTimeout)
             mainHandler.postDelayed(bindTimeout, 12_000L)
-            logDiagnostic("BIND call accepted; waiting up to 12s for callback; component=${args.componentName.flattenToShortString()}; version=3; tag=LimbusFpsShell")
+            logDiagnostic("BIND call accepted; waiting up to 12s for callback; component=${packageName}/.ShellUserService; version=4; tag=LimbusFpsShell")
             resultStatus.text = "Подключаю shell-службу Shizuku… Если не подключится за 12 секунд, скопируй логи."
         } catch (e: Exception) {
             mainHandler.removeCallbacks(bindTimeout)
