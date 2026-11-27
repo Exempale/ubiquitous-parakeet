@@ -3,15 +3,19 @@ package dev.limbus.fpsunlocker
 import android.content.Context
 import android.os.Binder
 import android.util.Log
+import androidx.annotation.Keep
 
+@Keep
 class ShellUserService : IShizukuShellService.Stub {
     private val createdWithContext: Boolean
 
+    @Keep
     constructor() : super() {
         createdWithContext = false
         Log.i(TAG, "UserService constructed with default constructor; uid=${Binder.getCallingUid()}")
     }
 
+    @Keep
     constructor(context: Context) : super() {
         createdWithContext = true
         Log.i(TAG, "UserService constructed with Context constructor; package=${context.packageName}")
