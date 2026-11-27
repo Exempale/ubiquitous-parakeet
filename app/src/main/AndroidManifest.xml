@@ -6,6 +6,7 @@
 
     <application
         android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
         android:label="Limbus FPS Unlocker"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
