@@ -1,11 +1,11 @@
 name: Build Android APK
 
 on:
-  workflow_dispatch:
   push:
     branches: [ main ]
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -25,10 +25,12 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Build installable debug APK
+      - name: Build installable APK
         run: gradle assembleDebug
       - name: Prepare APK
-        run: mkdir -p dist && cp app/build/outputs/apk/debug/app-debug.apk dist/LimbusFPSUnlocker.apk
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/LimbusFPSUnlocker.apk
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -37,7 +39,7 @@ jobs:
           if-no-files-found: error
 
   publish-release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -49,6 +51,10 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Limbus FPS Unlocker ${{ github.ref_name }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', github.run_number) }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Limbus FPS Unlocker {0}', github.ref_name) || format('Limbus FPS Unlocker Build #{0}', github.run_number) }}
           generate_release_notes: true
+          overwrite_files: true
+          fail_on_unmatched_files: true
           files: dist/LimbusFPSUnlocker.apk
