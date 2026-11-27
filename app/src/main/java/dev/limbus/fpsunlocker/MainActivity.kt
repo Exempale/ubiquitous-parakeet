@@ -4,14 +4,9 @@ import android.app.Activity
 import android.content.Intent
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.ComponentName
-import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.os.IBinder
 import android.provider.Settings
 import android.graphics.Color
 import android.graphics.Typeface
@@ -28,6 +23,7 @@ import java.util.Locale
 import android.util.Log
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.io.ByteArrayOutputStream
 import kotlin.concurrent.thread
 
 class MainActivity : Activity(), DisplayManager.DisplayListener {
@@ -37,43 +33,8 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
     private lateinit var gameStatus: TextView
     private lateinit var shizukuStatus: TextView
     private lateinit var resultStatus: TextView
-    private var shellService: IShizukuShellService? = null
-    private var shellBindingRequested = false
-    private var userServiceArgs: Shizuku.UserServiceArgs? = null
-    private val mainHandler = Handler(Looper.getMainLooper())
-    @Volatile private var bindTimedOut = false
     private val diagnosticLog = StringBuilder()
-    private val bindTimeout = Runnable {
-        if (shellService == null && shellBindingRequested) {
-            shellBindingRequested = false
-            bindTimedOut = true
-            logDiagnostic("TIMEOUT: Shizuku не вернул Binder за 12 секунд")
-            updateShizukuStatus("Shizuku доступен, но Shell-служба не запустилась за 12 секунд. Скопируй логи.")
-            if (::resultStatus.isInitialized) resultStatus.text = "Подключение не завершилось. Нажми «ПРОВЕРИТЬ SHIZUKU» и скопируй логи."
-        }
-    }
-
-    private val shellConnection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            mainHandler.removeCallbacks(bindTimeout)
-            shellService = IShizukuShellService.Stub.asInterface(service)
-            shellBindingRequested = false
-            logDiagnostic("CALLBACK onServiceConnected: binder=${service != null}, alive=${service?.isBinderAlive}")
-            val remoteInfo = runCatching { shellService?.getDiagnostics() ?: "null service" }
-                .getOrElse { "getDiagnostics failed: ${Log.getStackTraceString(it)}" }
-            logDiagnostic("REMOTE SERVICE: $remoteInfo")
-            updateShizukuStatus("Shizuku подключён • shell-служба готова")
-            if (::resultStatus.isInitialized) resultStatus.text = "Shell-служба готова. Теперь можно применять настройки."
-        }
-
-        override fun onServiceDisconnected(name: ComponentName?) {
-            mainHandler.removeCallbacks(bindTimeout)
-            shellService = null
-            shellBindingRequested = false
-            logDiagnostic("CALLBACK onServiceDisconnected")
-            updateShizukuStatus("Shell-служба отключена. Проверь Shizuku.")
-        }
-    }
+    @Volatile private var lastCommandSummary: String = "Команды ещё не выполнялись."
 
     private val backgroundColor = Color.rgb(8, 11, 18)
     private val cardColor = Color.rgb(20, 27, 39)
@@ -145,12 +106,12 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
             checkShizuku(requestIfNeeded = true)
         })
         shizukuCard.addView(space(8))
-        shizukuCard.addView(actionButton("ПРИМЕНИТЬ ЦЕЛЬ 120 FPS", cyan) {
-            if (ensureShizukuPermission() && ensureShellService()) applyFpsTarget()
+        shizukuCard.addView(actionButton("ПРИМЕНИТЬ GAME MODE 120 FPS", cyan) {
+            if (ensureShizukuPermission()) applyFpsTarget()
         })
         shizukuCard.addView(space(8))
         shizukuCard.addView(actionButton("ВОССТАНОВИТЬ НАСТРОЙКУ", Color.rgb(76, 45, 57)) {
-            if (ensureShizukuPermission() && ensureShellService()) restoreFpsTarget()
+            if (ensureShizukuPermission()) restoreFpsTarget()
         })
         resultStatus = label("Изменения не применялись.", 12f, muted, false)
         shizukuCard.addView(space(8))
@@ -173,12 +134,12 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
         infoCard.addView(label("ЧТО ДЕЛАЕТ ЭТА НАСТРОЙКА", 14f, white, true))
         infoCard.addView(space(6))
         infoCard.addView(label(
-            "Через Shizuku приложение задаёт Android GameManager цель 120 FPS для режима Performance. Это убирает возможный системный потолок 60 FPS, но не меняет внутренний лимит Unity. Реальные 120 FPS не гарантированы.",
+            "Через Shizuku приложение задаёт Android GameManager режим Performance и значение fps=120. Важно: Android FPS throttling умеет только ограничивать FPS, а не превращать внутренние 60 FPS игры в 120. Настройка не снимает лимит Unity.",
             13f, muted, false
         ))
         infoCard.addView(space(8))
         infoCard.addView(label(
-            "Перед изменением сохраняется текущая game_overlay-конфигурация. Восстановление вернёт её и переключит GameManager в Standard mode.",
+            "Перед изменением сохраняется текущая game_overlay-конфигурация. После записи приложение перечитывает её для проверки. Восстановление возвращает прежнее значение и Standard mode.",
             13f, muted, false
         ))
         content.addView(infoCard)
@@ -206,9 +167,7 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
     }
 
     override fun onDestroy() {
-        mainHandler.removeCallbacks(bindTimeout)
         Shizuku.removeRequestPermissionResultListener(permissionListener)
-        userServiceArgs?.let { Shizuku.unbindUserService(it, shellConnection, true) }
         super.onDestroy()
     }
 
@@ -220,40 +179,6 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
         if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) return true
         Shizuku.requestPermission(SHIZUKU_PERMISSION_CODE)
         updateShizukuStatus("Выдай разрешение этому приложению в окне Shizuku.")
-        return false
-    }
-
-    private fun ensureShellService(): Boolean {
-        if (shellService != null) return true
-        if (shellBindingRequested) {
-            resultStatus.text = "Подключаю shell-службу Shizuku… Подожди пару секунд."
-            return false
-        }
-        try {
-            logDiagnostic("BIND requested: ping=${Shizuku.pingBinder()}, uid=${runCatching { Shizuku.getUid() }.getOrDefault(-1)}, api=${runCatching { Shizuku.getVersion() }.getOrDefault(-1)}, serverPatch=${runCatching { Shizuku.getServerPatchVersion() }.getOrDefault(-1)}")
-            // Bump the UserService version to force Shizuku to discard any stale
-            // instance left by earlier builds. Debuggable=true makes the shell
-            // process visible in Android's running-process diagnostics.
-            val args = Shizuku.UserServiceArgs(
-                ComponentName(this, ShellUserService::class.java)
-            ).daemon(false)
-                .debuggable(true)
-                .processNameSuffix("fpsshell")
-                .version(5)
-                .tag("LimbusFpsShell")
-            userServiceArgs = args
-            shellBindingRequested = true
-            Shizuku.bindUserService(args, shellConnection)
-            mainHandler.removeCallbacks(bindTimeout)
-            mainHandler.postDelayed(bindTimeout, 12_000L)
-            logDiagnostic("BIND call accepted; waiting up to 12s for callback; component=${packageName}/.ShellUserService; version=5; debuggable=true; tag=LimbusFpsShell")
-            resultStatus.text = "Подключаю shell-службу Shizuku… Если не подключится за 12 секунд, скопируй логи."
-        } catch (e: Exception) {
-            mainHandler.removeCallbacks(bindTimeout)
-            shellBindingRequested = false
-            logDiagnostic("BIND EXCEPTION: ${Log.getStackTraceString(e)}")
-            resultStatus.text = "Не удалось запустить shell-службу: ${e.message ?: e.javaClass.simpleName}"
-        }
         return false
     }
 
@@ -273,31 +198,66 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
 
     private fun applyFpsTarget() {
         resultStatus.text = "Читаю текущую конфигурацию GameManager…"
-        thread {
+        thread(name = "limbus-fps-apply") {
             try {
                 val old = runShell("device_config get game_overlay $GAME_PACKAGE")
-                if (old.exitCode != 0) throw IllegalStateException(old.output.ifBlank { "Не удалось прочитать game_overlay" })
-                val previous = old.output.trim().ifBlank { "null" }
-                val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-                if (!prefs.contains(BACKUP_KEY)) prefs.edit().putString(BACKUP_KEY, previous).apply()
+                if (old.exitCode != 0) {
+                    throw IllegalStateException("Чтение game_overlay: exit=${old.exitCode}; ${old.stderr.ifBlank { old.stdout }}")
+                }
 
-                val clauses = if (previous == "null") emptyList() else previous.split(":")
-                val preserved = clauses.filterNot { it.trim().startsWith("mode=2,") || it.trim() == "mode=2" }
-                val nextConfig = (preserved + "mode=2,fps=120").joinToString(":")
+                val previous = old.stdout.trim().ifBlank { "null" }
+                val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+                if (!prefs.contains(BACKUP_KEY)) {
+                    prefs.edit().putString(BACKUP_KEY, previous).apply()
+                    logDiagnostic("BACKUP saved: $previous")
+                }
+
+                val nextConfig = mergePerformanceFps(previous, 120)
                 val put = runShell("device_config put game_overlay $GAME_PACKAGE ${shellQuote(nextConfig)}")
-                if (put.exitCode != 0) throw IllegalStateException(put.output.ifBlank { "Не удалось записать FPS-конфигурацию" })
+                if (put.exitCode != 0) {
+                    throw IllegalStateException("Запись game_overlay: exit=${put.exitCode}; ${put.stderr.ifBlank { put.stdout }}")
+                }
+
+                val verify = runShell("device_config get game_overlay $GAME_PACKAGE")
+                if (verify.exitCode != 0 || verify.stdout.trim() != nextConfig) {
+                    throw IllegalStateException("Проверка конфигурации не прошла. Ожидалось: $nextConfig; получено: ${verify.stdout}; stderr: ${verify.stderr}")
+                }
 
                 val mode = runShell("cmd game mode performance $GAME_PACKAGE")
                 val message = if (mode.exitCode == 0) {
-                    "Цель 120 FPS записана. Performance mode включён. Перезапусти Limbus Company. Реальные 120 FPS ещё не подтверждены."
+                    "GameManager: Performance mode включён. Конфигурация проверена: ${verify.stdout.trim()}. Перезапусти игру. Это не гарантирует 120 FPS и не снимает собственный лимит игры."
                 } else {
-                    "Цель 120 FPS записана, но Performance mode не включился: ${mode.output}. Проверь поддержку GameManager на Nothing OS."
+                    "Конфигурация записана и проверена, но Performance mode завершился с кодом ${mode.exitCode}: ${mode.stderr.ifBlank { mode.stdout }}"
                 }
+                logDiagnostic("APPLY RESULT: $message")
                 runOnUiThread { resultStatus.text = message }
             } catch (e: Exception) {
-                runOnUiThread { resultStatus.text = "Ошибка: ${e.message ?: e.javaClass.simpleName}" }
+                val message = "Ошибка применения: ${e.message ?: e.javaClass.simpleName}"
+                logDiagnostic("APPLY ERROR: ${Log.getStackTraceString(e)}")
+                runOnUiThread { resultStatus.text = message }
             }
         }
+    }
+
+    private fun mergePerformanceFps(previous: String, fps: Int): String {
+        val entries = if (previous.isBlank() || previous == "null") {
+            mutableListOf<String>()
+        } else {
+            previous.split(":").filter { it.isNotBlank() }.toMutableList()
+        }
+
+        val index = entries.indexOfFirst { entry ->
+            entry.split(",").firstOrNull()?.trim() == "mode=2"
+        }
+
+        if (index < 0) {
+            entries.add("mode=2,fps=$fps")
+        } else {
+            val parts = entries[index].split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            val updated = parts.filterNot { it.startsWith("fps=") } + "fps=$fps"
+            entries[index] = updated.joinToString(",")
+        }
+        return entries.joinToString(":")
     }
 
     private fun restoreFpsTarget() {
@@ -316,10 +276,10 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
                     "device_config put game_overlay $GAME_PACKAGE ${shellQuote(previous)}"
                 }
                 val restored = runShell(restoreCommand)
-                if (restored.exitCode != 0) throw IllegalStateException(restored.output.ifBlank { "Не удалось восстановить game_overlay" })
+                if (restored.exitCode != 0) throw IllegalStateException(restored.stderr.ifBlank { restored.stdout.ifBlank { "Не удалось восстановить game_overlay" } })
                 val mode = runShell("cmd game mode standard $GAME_PACKAGE")
                 prefs.edit().remove(BACKUP_KEY).apply()
-                val suffix = if (mode.exitCode == 0) " GameManager переключён в Standard mode." else " Конфигурация восстановлена, но Standard mode не переключился: ${mode.output}"
+                val suffix = if (mode.exitCode == 0) " GameManager переключён в Standard mode." else " Конфигурация восстановлена, но Standard mode не переключился: ${mode.stderr.ifBlank { mode.stdout }}"
                 runOnUiThread { resultStatus.text = "Прежняя game_overlay-конфигурация восстановлена.$suffix" }
             } catch (e: Exception) {
                 runOnUiThread { resultStatus.text = "Ошибка восстановления: ${e.message ?: e.javaClass.simpleName}" }
@@ -327,15 +287,57 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
         }
     }
 
-    private data class ShellResult(val exitCode: Int, val output: String)
+    private data class ShellResult(
+        val exitCode: Int,
+        val stdout: String,
+        val stderr: String
+    )
 
+    @Suppress("DiscouragedPrivateApi")
     private fun runShell(command: String): ShellResult {
-        val raw = shellService?.execute(command)
-            ?: throw IllegalStateException("Shizuku shell-служба не подключена")
-        val firstLine = raw.substringBefore("\n")
-        val exit = firstLine.removePrefix("EXIT:").toIntOrNull() ?: 1
-        val output = raw.substringAfter("\n", "").trim()
-        return ShellResult(exit, output)
+        if (!Shizuku.pingBinder()) {
+            throw IllegalStateException("Shizuku Binder недоступен")
+        }
+        if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+            throw SecurityException("Приложению не выдано разрешение Shizuku")
+        }
+
+        val method = Shizuku::class.java.getDeclaredMethod(
+            "newProcess",
+            Array<String>::class.java,
+            Array<String>::class.java,
+            String::class.java
+        )
+        method.isAccessible = true
+
+        val remote = try {
+            method.invoke(null, arrayOf("sh", "-c", command), null, null) as? Process
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            throw (e.targetException ?: e)
+        } ?: throw IllegalStateException("Shizuku newProcess вернул null")
+
+        val stdoutBytes = ByteArrayOutputStream()
+        val stderrBytes = ByteArrayOutputStream()
+        val stdoutThread = thread(name = "limbus-shizuku-stdout") {
+            remote.inputStream.use { it.copyTo(stdoutBytes) }
+        }
+        val stderrThread = thread(name = "limbus-shizuku-stderr") {
+            remote.errorStream.use { it.copyTo(stderrBytes) }
+        }
+
+        val exitCode = try {
+            remote.waitFor()
+        } finally {
+            stdoutThread.join(5_000)
+            stderrThread.join(5_000)
+            remote.destroy()
+        }
+
+        val stdout = stdoutBytes.toString(Charsets.UTF_8.name()).trim()
+        val stderr = stderrBytes.toString(Charsets.UTF_8.name()).trim()
+        lastCommandSummary = "exit=$exitCode; stdout=$stdout; stderr=$stderr"
+        logDiagnostic("COMMAND [$command] -> $lastCommandSummary")
+        return ShellResult(exitCode, stdout, stderr)
     }
 
     private fun logDiagnostic(message: String) {
@@ -357,7 +359,7 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
             append("Shizuku ping: ${runCatching { Shizuku.pingBinder() }.getOrDefault(false)}\n")
             append("Shizuku permission: ${runCatching { Shizuku.checkSelfPermission() }.getOrDefault(-1)}\n")
             append("Shizuku API: ${runCatching { Shizuku.getVersion() }.getOrDefault(-1)}; UID: ${runCatching { Shizuku.getUid() }.getOrDefault(-1)}\n")
-            append("Shell bound: ${shellService != null}; binding requested: $shellBindingRequested; timed out: $bindTimedOut\n\n")
+            append("Execution: Shizuku.newProcess; last command: $lastCommandSummary\n\n")
             append(if (live.isNotBlank()) live else saved)
         }
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
