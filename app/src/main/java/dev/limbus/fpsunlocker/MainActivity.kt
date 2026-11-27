@@ -106,11 +106,11 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
             checkShizuku(requestIfNeeded = true)
         })
         shizukuCard.addView(space(8))
-        shizukuCard.addView(actionButton("ПРИМЕНИТЬ GAME MODE 120 FPS", cyan) {
+        shizukuCard.addView(actionButton("ВКЛЮЧИТЬ PERFORMANCE MODE", cyan) {
             if (ensureShizukuPermission()) applyFpsTarget()
         })
         shizukuCard.addView(space(8))
-        shizukuCard.addView(actionButton("ВОССТАНОВИТЬ НАСТРОЙКУ", Color.rgb(76, 45, 57)) {
+        shizukuCard.addView(actionButton("ВЕРНУТЬ STANDARD MODE", Color.rgb(76, 45, 57)) {
             if (ensureShizukuPermission()) restoreFpsTarget()
         })
         resultStatus = label("Изменения не применялись.", 12f, muted, false)
@@ -134,12 +134,12 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
         infoCard.addView(label("ЧТО ДЕЛАЕТ ЭТА НАСТРОЙКА", 14f, white, true))
         infoCard.addView(space(6))
         infoCard.addView(label(
-            "Через Shizuku приложение задаёт Android GameManager режим Performance и значение fps=120. Важно: Android FPS throttling умеет только ограничивать FPS, а не превращать внутренние 60 FPS игры в 120. Настройка не снимает лимит Unity.",
+            "Через Shizuku приложение переключает поддерживаемый Android Game Mode для Limbus Company. Android 16 на этом устройстве блокирует запись game_overlay, поэтому приложение не пытается обходить системный allowlist. Performance mode не гарантирует 120 FPS и не снимает внутренний лимит игры.",
             13f, muted, false
         ))
         infoCard.addView(space(8))
         infoCard.addView(label(
-            "Перед изменением сохраняется текущая game_overlay-конфигурация. После записи приложение перечитывает её для проверки. Восстановление возвращает прежнее значение и Standard mode.",
+            "Перед включением проверяется список режимов, которые Android действительно поддерживает для игры. Кнопка восстановления возвращает Standard mode. FPS игры нужно проверять отдельно.",
             13f, muted, false
         ))
         content.addView(infoCard)
@@ -197,92 +197,71 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
     }
 
     private fun applyFpsTarget() {
-        resultStatus.text = "Читаю текущую конфигурацию GameManager…"
-        thread(name = "limbus-fps-apply") {
+        resultStatus.text = "Проверяю доступные режимы Android GameManager…"
+        thread(name = "limbus-game-mode-apply") {
             try {
-                val old = runShell("device_config get game_overlay $GAME_PACKAGE")
-                if (old.exitCode != 0) {
-                    throw IllegalStateException("Чтение game_overlay: exit=${old.exitCode}; ${old.stderr.ifBlank { old.stdout }}")
+                val before = runShell("cmd game list-modes $GAME_PACKAGE")
+                if (before.exitCode != 0) {
+                    throw IllegalStateException("Не удалось прочитать режимы игры: ${before.stderr.ifBlank { before.stdout }}")
+                }
+                logDiagnostic("GAME MODES BEFORE: ${before.stdout}")
+
+                val supported = before.stdout.substringAfter("available game modes: [", "")
+                    .substringBefore("]", "")
+                    .split(",")
+                    .map { it.trim().lowercase(Locale.US) }
+                    .filter { it.isNotBlank() }
+
+                if ("performance" !in supported) {
+                    throw IllegalStateException(
+                        "Android не сообщает Performance mode как доступный для Limbus Company. " +
+                        "Нельзя безопасно включить его через GameManager. Ответ: ${before.stdout}"
+                    )
                 }
 
-                val previous = old.stdout.trim().ifBlank { "null" }
-                val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-                if (!prefs.contains(BACKUP_KEY)) {
-                    prefs.edit().putString(BACKUP_KEY, previous).apply()
-                    logDiagnostic("BACKUP saved: $previous")
+                val changed = runShell("cmd game mode performance $GAME_PACKAGE")
+                if (changed.exitCode != 0) {
+                    throw IllegalStateException("GameManager отказал: ${changed.stderr.ifBlank { changed.stdout }}")
                 }
 
-                val nextConfig = mergePerformanceFps(previous, 120)
-                val put = runShell("device_config put game_overlay $GAME_PACKAGE ${shellQuote(nextConfig)}")
-                if (put.exitCode != 0) {
-                    throw IllegalStateException("Запись game_overlay: exit=${put.exitCode}; ${put.stderr.ifBlank { put.stdout }}")
+                val after = runShell("cmd game list-modes $GAME_PACKAGE")
+                if (after.exitCode != 0 || !after.stdout.contains("current mode: performance")) {
+                    throw IllegalStateException(
+                        "Команда завершилась, но проверка режима не подтвердила Performance. " +
+                        "Ответ: ${after.stdout}; stderr: ${after.stderr}"
+                    )
                 }
 
-                val verify = runShell("device_config get game_overlay $GAME_PACKAGE")
-                if (verify.exitCode != 0 || verify.stdout.trim() != nextConfig) {
-                    throw IllegalStateException("Проверка конфигурации не прошла. Ожидалось: $nextConfig; получено: ${verify.stdout}; stderr: ${verify.stderr}")
-                }
-
-                val mode = runShell("cmd game mode performance $GAME_PACKAGE")
-                val message = if (mode.exitCode == 0) {
-                    "GameManager: Performance mode включён. Конфигурация проверена: ${verify.stdout.trim()}. Перезапусти игру. Это не гарантирует 120 FPS и не снимает собственный лимит игры."
-                } else {
-                    "Конфигурация записана и проверена, но Performance mode завершился с кодом ${mode.exitCode}: ${mode.stderr.ifBlank { mode.stdout }}"
-                }
+                val message = "Performance mode включён и проверен. ${after.stdout.trim()} Это не разблокирует FPS выше внутреннего лимита игры."
                 logDiagnostic("APPLY RESULT: $message")
                 runOnUiThread { resultStatus.text = message }
             } catch (e: Exception) {
-                val message = "Ошибка применения: ${e.message ?: e.javaClass.simpleName}"
+                val message = "Не удалось включить Performance mode: ${e.message ?: e.javaClass.simpleName}"
                 logDiagnostic("APPLY ERROR: ${Log.getStackTraceString(e)}")
                 runOnUiThread { resultStatus.text = message }
             }
         }
     }
 
-    private fun mergePerformanceFps(previous: String, fps: Int): String {
-        val entries = if (previous.isBlank() || previous == "null") {
-            mutableListOf<String>()
-        } else {
-            previous.split(":").filter { it.isNotBlank() }.toMutableList()
-        }
-
-        val index = entries.indexOfFirst { entry ->
-            entry.split(",").firstOrNull()?.trim() == "mode=2"
-        }
-
-        if (index < 0) {
-            entries.add("mode=2,fps=$fps")
-        } else {
-            val parts = entries[index].split(",").map { it.trim() }.filter { it.isNotEmpty() }
-            val updated = parts.filterNot { it.startsWith("fps=") } + "fps=$fps"
-            entries[index] = updated.joinToString(",")
-        }
-        return entries.joinToString(":")
-    }
-
     private fun restoreFpsTarget() {
-        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        if (!prefs.contains(BACKUP_KEY)) {
-            resultStatus.text = "Резервной копии нет — приложение ещё не меняло настройку."
-            return
-        }
-        val previous = prefs.getString(BACKUP_KEY, "null") ?: "null"
-        resultStatus.text = "Восстанавливаю прежнюю конфигурацию…"
-        thread {
+        resultStatus.text = "Возвращаю Standard mode…"
+        thread(name = "limbus-game-mode-restore") {
             try {
-                val restoreCommand = if (previous == "null" || previous.isBlank()) {
-                    "device_config delete game_overlay $GAME_PACKAGE"
-                } else {
-                    "device_config put game_overlay $GAME_PACKAGE ${shellQuote(previous)}"
+                val restored = runShell("cmd game mode standard $GAME_PACKAGE")
+                if (restored.exitCode != 0) {
+                    throw IllegalStateException(restored.stderr.ifBlank { restored.stdout.ifBlank { "GameManager вернул код ${restored.exitCode}" } })
                 }
-                val restored = runShell(restoreCommand)
-                if (restored.exitCode != 0) throw IllegalStateException(restored.stderr.ifBlank { restored.stdout.ifBlank { "Не удалось восстановить game_overlay" } })
-                val mode = runShell("cmd game mode standard $GAME_PACKAGE")
-                prefs.edit().remove(BACKUP_KEY).apply()
-                val suffix = if (mode.exitCode == 0) " GameManager переключён в Standard mode." else " Конфигурация восстановлена, но Standard mode не переключился: ${mode.stderr.ifBlank { mode.stdout }}"
-                runOnUiThread { resultStatus.text = "Прежняя game_overlay-конфигурация восстановлена.$suffix" }
+                val verify = runShell("cmd game list-modes $GAME_PACKAGE")
+                if (verify.exitCode != 0 || !verify.stdout.contains("current mode: standard")) {
+                    throw IllegalStateException("Проверка Standard mode не прошла: ${verify.stdout}; ${verify.stderr}")
+                }
+                val message = "Standard mode восстановлен. ${verify.stdout.trim()}"
+                logDiagnostic("RESTORE RESULT: $message")
+                runOnUiThread { resultStatus.text = message }
             } catch (e: Exception) {
-                runOnUiThread { resultStatus.text = "Ошибка восстановления: ${e.message ?: e.javaClass.simpleName}" }
+                val message = "Ошибка восстановления: ${e.message ?: e.javaClass.simpleName}"
+                logDiagnostic("RESTORE ERROR: ${Log.getStackTraceString(e)}")
+                runOnUiThread { resultStatus.text = message }
             }
         }
     }
