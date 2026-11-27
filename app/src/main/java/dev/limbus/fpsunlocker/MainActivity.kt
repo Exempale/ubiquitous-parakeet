@@ -2,11 +2,15 @@ package dev.limbus.fpsunlocker
 
 import android.app.Activity
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.IBinder
 import android.provider.Settings
 import android.graphics.Color
@@ -15,11 +19,15 @@ import android.graphics.drawable.GradientDrawable
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.Toast
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import rikka.shizuku.Shizuku
 import java.util.Locale
+import android.util.Log
+import java.text.SimpleDateFormat
+import java.util.Date
 import kotlin.concurrent.thread
 
 class MainActivity : Activity(), DisplayManager.DisplayListener {
@@ -32,17 +40,34 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
     private var shellService: IShizukuShellService? = null
     private var shellBindingRequested = false
     private var userServiceArgs: Shizuku.UserServiceArgs? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile private var bindTimedOut = false
+    private val diagnosticLog = StringBuilder()
+    private val bindTimeout = Runnable {
+        if (shellService == null && shellBindingRequested) {
+            shellBindingRequested = false
+            bindTimedOut = true
+            logDiagnostic("TIMEOUT: Shizuku не вернул Binder за 12 секунд")
+            updateShizukuStatus("Shizuku доступен, но Shell-служба не запустилась за 12 секунд. Скопируй логи.")
+            if (::resultStatus.isInitialized) resultStatus.text = "Подключение не завершилось. Нажми «ПРОВЕРИТЬ SHIZUKU» и скопируй логи."
+        }
+    }
 
     private val shellConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            mainHandler.removeCallbacks(bindTimeout)
             shellService = IShizukuShellService.Stub.asInterface(service)
             shellBindingRequested = false
+            logDiagnostic("CALLBACK onServiceConnected: binder=${service != null}, alive=${service?.isBinderAlive}")
             updateShizukuStatus("Shizuku подключён • shell-служба готова")
+            if (::resultStatus.isInitialized) resultStatus.text = "Shell-служба готова. Теперь можно применять настройки."
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
+            mainHandler.removeCallbacks(bindTimeout)
             shellService = null
             shellBindingRequested = false
+            logDiagnostic("CALLBACK onServiceDisconnected")
             updateShizukuStatus("Shell-служба отключена. Проверь Shizuku.")
         }
     }
@@ -69,6 +94,7 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
         window.statusBarColor = backgroundColor
         window.navigationBarColor = backgroundColor
         Shizuku.addRequestPermissionResultListener(permissionListener)
+        logDiagnostic("APP START: sdk=${android.os.Build.VERSION.SDK_INT}, app=${packageName}, shizukuApi=${runCatching { Shizuku.getVersion() }.getOrDefault(-1)}")
 
         val density = resources.displayMetrics.density
         val pagePadding = (22 * density).toInt()
@@ -126,6 +152,8 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
         resultStatus = label("Изменения не применялись.", 12f, muted, false)
         shizukuCard.addView(space(8))
         shizukuCard.addView(resultStatus)
+        shizukuCard.addView(space(8))
+        shizukuCard.addView(actionButton("КОПИРОВАТЬ ЛОГИ", Color.rgb(38, 51, 68)) { copyLogs() })
         content.addView(shizukuCard)
 
         content.addView(space(14))
@@ -175,6 +203,7 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(bindTimeout)
         Shizuku.removeRequestPermissionResultListener(permissionListener)
         userServiceArgs?.let { Shizuku.unbindUserService(it, shellConnection, true) }
         super.onDestroy()
@@ -198,21 +227,28 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
             return false
         }
         try {
+            logDiagnostic("BIND requested: ping=${Shizuku.pingBinder()}, uid=${runCatching { Shizuku.getUid() }.getOrDefault(-1)}, api=${runCatching { Shizuku.getVersion() }.getOrDefault(-1)}")
             val args = Shizuku.UserServiceArgs(
                 ComponentName(this, ShellUserService::class.java)
-            ).daemon(false).processNameSuffix("fpsshell").version(1).tag("LimbusFpsShell")
+            ).daemon(false).processNameSuffix("fpsshell").version(2).tag("LimbusFpsShell")
             userServiceArgs = args
             shellBindingRequested = true
             Shizuku.bindUserService(args, shellConnection)
-            resultStatus.text = "Подключаю shell-службу Shizuku… После подключения нажми кнопку ещё раз."
+            mainHandler.removeCallbacks(bindTimeout)
+            mainHandler.postDelayed(bindTimeout, 12_000L)
+            logDiagnostic("BIND call accepted; waiting up to 12s for callback")
+            resultStatus.text = "Подключаю shell-службу Shizuku… Если не подключится за 12 секунд, скопируй логи."
         } catch (e: Exception) {
+            mainHandler.removeCallbacks(bindTimeout)
             shellBindingRequested = false
+            logDiagnostic("BIND EXCEPTION: ${Log.getStackTraceString(e)}")
             resultStatus.text = "Не удалось запустить shell-службу: ${e.message ?: e.javaClass.simpleName}"
         }
         return false
     }
 
     private fun checkShizuku(requestIfNeeded: Boolean) {
+        logDiagnostic("CHECK Shizuku: ping=${Shizuku.pingBinder()}, permission=${runCatching { Shizuku.checkSelfPermission() }.getOrDefault(-1)}, api=${runCatching { Shizuku.getVersion() }.getOrDefault(-1)}")
         if (!Shizuku.pingBinder()) {
             updateShizukuStatus("Shizuku не запущен")
             return
@@ -290,6 +326,34 @@ class MainActivity : Activity(), DisplayManager.DisplayListener {
         val exit = firstLine.removePrefix("EXIT:").toIntOrNull() ?: 1
         val output = raw.substringAfter("\n", "").trim()
         return ShellResult(exit, output)
+    }
+
+    private fun logDiagnostic(message: String) {
+        val line = "${SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())} | $message"
+        synchronized(diagnosticLog) {
+            diagnosticLog.append(line).append('\\n')
+            if (diagnosticLog.length > 24000) diagnosticLog.delete(0, diagnosticLog.length - 24000)
+        }
+        Log.i("LimbusFPS", message)
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("diagnostics", synchronized(diagnosticLog) { diagnosticLog.toString() }).apply()
+    }
+
+    private fun copyLogs() {
+        val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString("diagnostics", "") ?: ""
+        val live = synchronized(diagnosticLog) { diagnosticLog.toString() }
+        val report = buildString {
+            append("Limbus FPS Unlocker diagnostics\\n")
+            append("Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}; Android ${android.os.Build.VERSION.RELEASE} (SDK ${android.os.Build.VERSION.SDK_INT})\\n")
+            append("Shizuku ping: ${runCatching { Shizuku.pingBinder() }.getOrDefault(false)}\\n")
+            append("Shizuku permission: ${runCatching { Shizuku.checkSelfPermission() }.getOrDefault(-1)}\\n")
+            append("Shizuku API: ${runCatching { Shizuku.getVersion() }.getOrDefault(-1)}; UID: ${runCatching { Shizuku.getUid() }.getOrDefault(-1)}\\n")
+            append("Shell bound: ${shellService != null}; binding requested: $shellBindingRequested; timed out: $bindTimedOut\\n\\n")
+            append(if (live.isNotBlank()) live else saved)
+        }
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Limbus FPS diagnostics", report))
+        Toast.makeText(this, "Логи скопированы. Вставь их сюда.", Toast.LENGTH_LONG).show()
+        logDiagnostic("USER copied diagnostics")
     }
 
     private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
